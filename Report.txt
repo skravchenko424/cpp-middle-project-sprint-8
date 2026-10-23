@@ -1,0 +1,148 @@
+=====
+Asan 
+=====
+
+(clang++-20 -fsanitize=address -fno-omit-frame-pointer -g leak_example.cpp -o leak_example && ./leak_example)
+
+1) For missing virtual:
+
+#include <iostream>
+
+class Base {
+public:
+    ~Base() {}  // Невиртуальный
+};
+
+class Derived : public Base {
+public:
+    Derived() { data = new int[1000]; }  // Выделение памяти
+    ~Derived() { delete[] data; }  // Освобождение в деструкторе наследника
+private:
+    int* data;
+};
+
+int main() {
+    Base* obj = new Derived();
+    delete obj;  // Утечка, т.к. вызывается деструктор Base, а не Derived
+    return 0;
+}
+
+Report:
+=================================================================
+==159403==ERROR: AddressSanitizer: new-delete-type-mismatch on 0x7292515e0010 in thread T0:
+  object passed to delete has wrong type:
+  size of the allocated type:   8 bytes;
+  size of the deallocated type: 1 bytes.
+    #0 0x6164e46d9616 in operator delete(void*, unsigned long) (/workspaces/cpp-middle-project-sprint-8/tests/tests_data/leak_example+0x116616) (BuildId: 17edd3ed0213438e6d195aacfe84909dc09b0a87)
+    #1 0x6164e46d9e66 in main /workspaces/cpp-middle-project-sprint-8/tests/tests_data/leak_example.cpp:18:5
+    #2 0x7672522d2577  (/lib/x86_64-linux-gnu/libc.so.6+0x2a577) (BuildId: ae7440bbdce614e0e79280c3b2e45b1df44e639c)
+    #3 0x7672522d263a in __libc_start_main (/lib/x86_64-linux-gnu/libc.so.6+0x2a63a) (BuildId: ae7440bbdce614e0e79280c3b2e45b1df44e639c)
+    #4 0x6164e45f0364 in _start (/workspaces/cpp-middle-project-sprint-8/tests/tests_data/leak_example+0x2d364) (BuildId: 17edd3ed0213438e6d195aacfe84909dc09b0a87)
+
+0x7292515e0010 is located 0 bytes inside of 8-byte region [0x7292515e0010,0x7292515e0018)
+allocated by thread T0 here:
+    #0 0x6164e46d8991 in operator new(unsigned long) (/workspaces/cpp-middle-project-sprint-8/tests/tests_data/leak_example+0x115991) (BuildId: 17edd3ed0213438e6d195aacfe84909dc09b0a87)
+    #1 0x6164e46d9e28 in main /workspaces/cpp-middle-project-sprint-8/tests/tests_data/leak_example.cpp:17:17
+    #2 0x7672522d2577  (/lib/x86_64-linux-gnu/libc.so.6+0x2a577) (BuildId: ae7440bbdce614e0e79280c3b2e45b1df44e639c)
+    #3 0x7672522d263a in __libc_start_main (/lib/x86_64-linux-gnu/libc.so.6+0x2a63a) (BuildId: ae7440bbdce614e0e79280c3b2e45b1df44e639c)
+    #4 0x6164e45f0364 in _start (/workspaces/cpp-middle-project-sprint-8/tests/tests_data/leak_example+0x2d364) (BuildId: 17edd3ed0213438e6d195aacfe84909dc09b0a87)
+
+SUMMARY: AddressSanitizer: new-delete-type-mismatch (/workspaces/cpp-middle-project-sprint-8/tests/tests_data/leak_example+0x116616) (BuildId: 17edd3ed0213438e6d195aacfe84909dc09b0a87) in operator delete(void*, unsigned long)
+==159403==HINT: if you don't care about these errors you may set ASAN_OPTIONS=new_delete_type_mismatch=0
+==159403==ABORTING
+
+
+2) For fixed file - asan is silent.
+
+#include <iostream>
+
+class Base {
+public:
+    virtual ~Base() {}  // Невиртуальный
+};
+
+class Derived : public Base {
+public:
+    Derived() { data = new int[1000]; }  // Выделение памяти
+    ~Derived() { delete[] data; }  // Освобождение в деструкторе наследника
+private:
+    int* data;
+};
+
+int main() {
+    Base* obj = new Derived();
+    delete obj;  // Утечка, т.к. вызывается деструктор Base, а не Derived
+    return 0;
+}
+
+
+
+
+=====
+Perf
+=====
+
+clang++-20 -g -O2 perf_example.cpp -o /tmp/perf_example && sudo perf stat -e task-clock,cycles,instructions,branches,branch-misses /tmp/perf_example 2> perf_report.log
+
+1) Unoptimised version
+
+#include <vector>
+#include <string>
+
+struct HeavyObject {
+    std::string data[1000];  // Тяжёлый объект для имитации копирования
+};
+
+int main() {
+    std::vector<HeavyObject> vec(100000);  // Большой контейнер
+    for (const auto obj : vec) {  // Копирование без &
+        const auto& data = obj.data[0];
+    }
+    return 0;
+}
+
+Report:
+ Performance counter stats for '/tmp/perf_example':
+
+           2103.78 msec task-clock                       #    1.000 CPUs utilized             
+   <not supported>      cycles                                                                
+   <not supported>      instructions                                                          
+   <not supported>      branches                                                              
+   <not supported>      branch-misses                                                         
+
+       2.104080959 seconds time elapsed
+
+       0.487972000 seconds user
+       1.615909000 seconds sys
+
+
+2) Optimised version
+
+#include <vector>
+#include <string>
+
+struct HeavyObject {
+    std::string data[1000];  // Тяжёлый объект для имитации копирования
+};
+
+int main() {
+    std::vector<HeavyObject> vec(100000);  // Большой контейнер
+    for (const auto& obj : vec) {  // Копирование без &
+        const auto& data = obj.data[0];
+    }
+    return 0;
+}
+
+Report:
+ Performance counter stats for '/tmp/perf_example':
+
+           1857.65 msec task-clock                       #    1.000 CPUs utilized             
+   <not supported>      cycles                                                                
+   <not supported>      instructions                                                          
+   <not supported>      branches                                                              
+   <not supported>      branch-misses                                                         
+
+       1.858026604 seconds time elapsed
+
+       0.360396000 seconds user
+       1.497649000 seconds sys
