@@ -76,44 +76,24 @@ void RefactorHandler::handle_miss_override(const CXXMethodDecl *Method, Diagnost
     if (!SM.isInMainFile(Method->getLocation()))
         return;
 
-    SourceLocation EndLoc = Method->getNameInfo().getEndLoc();
+    TypeSourceInfo *TSI = Method->getTypeSourceInfo();
+    if (!TSI)
+        return;
+
+    SourceLocation EndLoc = TSI->getTypeLoc().getEndLoc();
     if (EndLoc.isInvalid())
         return;
 
-    const char *Buf = SM.getCharacterData(EndLoc);
-    if (!Buf)
+    SourceLocation InsertLoc = Lexer::getLocForEndOfToken(EndLoc, 0, SM, Method->getASTContext().getLangOpts());
+    if (InsertLoc.isInvalid())
         return;
-
-    const char *P = Buf;
-    int Depth = 0;
-
-    while (*P && *P != '(')
-        ++P;
-    if (!*P)
-        return;
-
-    while (*P) {
-        if (*P == '(')
-            ++Depth;
-        else if (*P == ')') {
-            --Depth;
-            if (Depth == 0) {
-                ++P;
-                break;
-            }
-        }
-        ++P;
-    }
-    if (Depth != 0)
-        return;
-
-    SourceLocation AfterParen = EndLoc.getLocWithOffset(P - Buf);
 
     static std::unordered_set<unsigned> Processed;
-    if (!Processed.insert(AfterParen.getRawEncoding()).second)
+    if (!Processed.insert(InsertLoc.getRawEncoding()).second)
         return;
 
-    Rewrite.InsertTextAfter(AfterParen, " override");
+    if (Rewrite.InsertTextAfter(InsertLoc, " override"))
+        return;
 
     const unsigned DiagID = Diag.getCustomDiagID(DiagnosticsEngine::Remark, "Добавлен override к методу");
     Diag.Report(Method->getLocation(), DiagID);
